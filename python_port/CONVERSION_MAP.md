@@ -1,0 +1,26 @@
+# TypeScript to Python Conversion Map
+
+- research/next.config.ts -> python_port/next_config.py
+- research/src/app/layout.tsx -> python_port/src/app/layout.py
+- research/src/app/page.tsx -> python_port/src/app/page.py
+- research/src/app/chat/page.tsx -> python_port/src/app/chat/page.py
+- research/src/app/api/chat/route.ts -> python_port/src/app/api/chat/route.py
+- research/src/app/api/auto-ingest/route.ts -> python_port/src/app/api/auto_ingest/route.py
+- research/src/app/api/extract/route.ts -> python_port/src/app/api/extract/route.py
+- research/src/app/api/vespa/load/route.ts -> python_port/src/app/api/vespa/load/route.py
+- research/src/app/api/vespa/search/route.ts -> python_port/src/app/api/vespa/search/route.py
+- research/src/lib/gemini.ts -> python_port/src/lib/gemini.py
+- research/src/lib/utils.ts -> python_port/src/lib/utils.py
+- research/src/lib/google/auth.server.ts -> python_port/src/lib/google/auth_server.py
+- research/src/lib/google/calendar.server.ts -> python_port/src/lib/google/calendar_server.py
+- research/src/lib/google/docs.server.ts -> python_port/src/lib/google/docs_server.py
+- research/src/lib/google/sheet.server.ts -> python_port/src/lib/google/sheet_server.py
+- research/src/lib/vespa/client.ts -> python_port/src/lib/vespa/client.py
+- research/src/lib/vespa/indexing.ts -> python_port/src/lib/vespa/indexing.py
+- research/src/lib/vespa/search.ts -> python_port/src/lib/vespa/search.py
+- research/src/components/ui/badge.tsx -> python_port/src/components/ui/badge.py
+- research/src/components/ui/button.tsx -> python_port/src/components/ui/button.py
+- research/src/components/ui/card.tsx -> python_port/src/components/ui/card.py
+- research/src/components/ui/input.tsx -> python_port/src/components/ui/input.py
+- research/src/components/ui/label.tsx -> python_port/src/components/ui/label.py
+- research/src/components/ui/progress.tsx -> python_port/src/components/ui/progress.py
