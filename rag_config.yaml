@@ -1,0 +1,29 @@
+project:
+  name: Query-based-Search RAG
+
+rag:
+  vector_db:
+    provider: qdrant
+    collection_name: research_chunks
+    distance: cosine
+    prefer_grpc: false
+
+  embeddings:
+    provider: huggingface
+    huggingface_model: sentence-transformers/all-MiniLM-L6-v2
+    openai_model: text-embedding-3-small
+    batch_size: 64
+
+  llm:
+    provider: google_genai
+    google_model: gemini-2.0-flash
+    temperature: 0.1
+
+  ingestion:
+    chunk_size: 2200
+    chunk_overlap: 120
+    analyse_visuals: true
+    max_visual_pages_per_document: 20
+
+  retrieval:
+    top_k: 4

@@ -1,2 +1,21 @@
 .venv
 .env
+venv
+__pycache__/
+*.py[cod]
+python_port/storage/uploads/
+
+# Python caches and local tooling
+*.pyo
+*.pyd
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+.ipynb_checkpoints/
+
+# Editor/system noise
+.vscode/
+.idea/
+Thumbs.db
