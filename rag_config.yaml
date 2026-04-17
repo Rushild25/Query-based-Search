@@ -9,21 +9,31 @@ rag:
     prefer_grpc: false
 
   embeddings:
-    provider: huggingface
+    provider: clip
     huggingface_model: sentence-transformers/all-MiniLM-L6-v2
     openai_model: text-embedding-3-small
     batch_size: 64
 
+  visual_embeddings:
+    enabled: true
+    provider: clip
+    model_name: ViT-B-32
+    pretrained: openai
+    collection_name: research_visual_chunks
+    batch_size: 24
+    max_visual_pages_per_document: 20
+
   llm:
     provider: google_genai
+    fallback_provider: groq
+    groq_model: llama-3.3-70b-versatile
+    groq_vision_model: llama-3.2-90b-vision-preview
     google_model: gemini-2.0-flash
     temperature: 0.1
 
   ingestion:
     chunk_size: 2200
     chunk_overlap: 120
-    analyse_visuals: true
-    max_visual_pages_per_document: 20
 
   retrieval:
-    top_k: 4
+    top_k: 10

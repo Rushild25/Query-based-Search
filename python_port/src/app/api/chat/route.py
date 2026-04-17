@@ -11,6 +11,7 @@ router = APIRouter(prefix="/api/chat", tags=["chat"])
 class ChatRequest(BaseModel):
     messages: list[dict]
     session_id: str
+    doc_id: str | None = None
     top_k: int = 5
 
 
@@ -27,6 +28,7 @@ async def chat(payload: ChatRequest) -> dict:
         result = answer_question(
             str(last.get("content", "")),
             session_id=payload.session_id,
+            doc_id=payload.doc_id,
             limit=payload.top_k,
             history=payload.messages,
         )

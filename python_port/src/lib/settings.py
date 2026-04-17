@@ -31,9 +31,23 @@ class EmbeddingSettings:
 
 
 @dataclass(frozen=True)
+class VisualEmbeddingSettings:
+    enabled: bool
+    provider: str
+    model_name: str
+    pretrained: str
+    collection_name: str
+    batch_size: int
+    max_visual_pages_per_document: int
+
+
+@dataclass(frozen=True)
 class LlmSettings:
     provider: str
+    fallback_provider: str
     google_model: str
+    groq_model: str
+    groq_vision_model: str
     temperature: float
 
 
@@ -41,8 +55,6 @@ class LlmSettings:
 class IngestionSettings:
     chunk_size: int
     chunk_overlap: int
-    analyse_visuals: bool
-    max_visual_pages_per_document: int
 
 
 @dataclass(frozen=True)
@@ -54,6 +66,7 @@ class RetrievalSettings:
 class RagSettings:
     vector_db: VectorDbSettings
     embeddings: EmbeddingSettings
+    visual_embeddings: VisualEmbeddingSettings
     llm: LlmSettings
     ingestion: IngestionSettings
     retrieval: RetrievalSettings
@@ -74,12 +87,13 @@ def _as_bool(value: str | None, default: bool) -> bool:
 
 @lru_cache(maxsize=1)
 def get_settings() -> RagSettings:
-    load_dotenv(PROJECT_ROOT / ".env")
+    load_dotenv(PROJECT_ROOT / ".env", override=True)
     cfg = _load_yaml(DEFAULT_CONFIG_PATH)
     rag = cfg.get("rag", {}) if isinstance(cfg.get("rag", {}), dict) else {}
 
     vector_cfg = rag.get("vector_db", {}) if isinstance(rag.get("vector_db", {}), dict) else {}
     emb_cfg = rag.get("embeddings", {}) if isinstance(rag.get("embeddings", {}), dict) else {}
+    visual_cfg = rag.get("visual_embeddings", {}) if isinstance(rag.get("visual_embeddings", {}), dict) else {}
     llm_cfg = rag.get("llm", {}) if isinstance(rag.get("llm", {}), dict) else {}
     ingestion_cfg = rag.get("ingestion", {}) if isinstance(rag.get("ingestion", {}), dict) else {}
     retrieval_cfg = rag.get("retrieval", {}) if isinstance(rag.get("retrieval", {}), dict) else {}
@@ -92,25 +106,42 @@ def get_settings() -> RagSettings:
     )
 
     embeddings = EmbeddingSettings(
-        provider=os.getenv("EMBEDDING_PROVIDER", str(emb_cfg.get("provider", "huggingface"))),
+        provider=os.getenv("EMBEDDING_PROVIDER", str(emb_cfg.get("provider", "clip"))),
         huggingface_model=os.getenv("HUGGINGFACE_EMBEDDING_MODEL", str(emb_cfg.get("huggingface_model", "sentence-transformers/all-MiniLM-L6-v2"))),
         openai_model=os.getenv("OPENAI_EMBEDDING_MODEL", str(emb_cfg.get("openai_model", "text-embedding-3-small"))),
         batch_size=int(os.getenv("EMBEDDING_BATCH_SIZE", str(emb_cfg.get("batch_size", 64)))),
     )
 
+    visual_embeddings = VisualEmbeddingSettings(
+        enabled=_as_bool(
+            os.getenv("RAG_VISUAL_EMBEDDINGS_ENABLED", os.getenv("RAG_ANALYSE_VISUALS")),
+            bool(visual_cfg.get("enabled", True)),
+        ),
+        provider=os.getenv("VISUAL_EMBEDDING_PROVIDER", str(visual_cfg.get("provider", "clip"))),
+        model_name=os.getenv("CLIP_MODEL_NAME", str(visual_cfg.get("model_name", "ViT-B-32"))),
+        pretrained=os.getenv("CLIP_PRETRAINED", str(visual_cfg.get("pretrained", "openai"))),
+        collection_name=os.getenv("QDRANT_VISUAL_COLLECTION", str(visual_cfg.get("collection_name", "research_visual_chunks"))),
+        batch_size=int(os.getenv("VISUAL_EMBEDDING_BATCH_SIZE", str(visual_cfg.get("batch_size", 24)))),
+        max_visual_pages_per_document=int(
+            os.getenv(
+                "RAG_MAX_VISUAL_PAGES_PER_DOC",
+                str(visual_cfg.get("max_visual_pages_per_document", ingestion_cfg.get("max_visual_pages_per_document", 20))),
+            )
+        ),
+    )
+
     llm = LlmSettings(
         provider=os.getenv("LLM_PROVIDER", str(llm_cfg.get("provider", "google_genai"))),
+        fallback_provider=os.getenv("LLM_FALLBACK_PROVIDER", str(llm_cfg.get("fallback_provider", "groq"))),
         google_model=os.getenv("GOOGLE_GENAI_MODEL", str(llm_cfg.get("google_model", "gemini-2.0-flash"))),
+        groq_model=os.getenv("GROQ_MODEL", str(llm_cfg.get("groq_model", "llama-3.3-70b-versatile"))),
+        groq_vision_model=os.getenv("GROQ_VISION_MODEL", str(llm_cfg.get("groq_vision_model", "llama-3.2-90b-vision-preview"))),
         temperature=float(os.getenv("LLM_TEMPERATURE", str(llm_cfg.get("temperature", 0.1)))),
     )
 
     ingestion = IngestionSettings(
         chunk_size=int(os.getenv("RAG_CHUNK_SIZE", str(ingestion_cfg.get("chunk_size", 1400)))),
         chunk_overlap=int(os.getenv("RAG_CHUNK_OVERLAP", str(ingestion_cfg.get("chunk_overlap", 220)))),
-        analyse_visuals=_as_bool(os.getenv("RAG_ANALYSE_VISUALS"), bool(ingestion_cfg.get("analyse_visuals", True))),
-        max_visual_pages_per_document=int(
-            os.getenv("RAG_MAX_VISUAL_PAGES_PER_DOC", str(ingestion_cfg.get("max_visual_pages_per_document", 20)))
-        ),
     )
 
     retrieval = RetrievalSettings(
@@ -120,6 +151,7 @@ def get_settings() -> RagSettings:
     return RagSettings(
         vector_db=vector_db,
         embeddings=embeddings,
+        visual_embeddings=visual_embeddings,
         llm=llm,
         ingestion=ingestion,
         retrieval=retrieval,

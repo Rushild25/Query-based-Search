@@ -2,10 +2,10 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from fastapi import APIRouter, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, File, Form, HTTPException, Query, UploadFile
 from pydantic import BaseModel, Field
 
-from src.lib.rag_service import ingest_pdf_bytes_for_session, ingest_pdf_path, list_documents
+from src.lib.rag_service import clear_documents, ingest_pdf_bytes_for_session, ingest_pdf_path, list_documents
 
 
 router = APIRouter(prefix="/api/ingest", tags=["ingest"])
@@ -17,13 +17,17 @@ class FolderIngestRequest(BaseModel):
 
 
 @router.post("/pdf")
-async def ingest_pdf(file: UploadFile = File(...), session_id: str = Form(default="default-session")) -> dict:
+async def ingest_pdf(
+    file: UploadFile = File(...),
+    session_id: str = Form(default="default-session"),
+    doc_id: str | None = Form(default=None),
+) -> dict:
     if not file.filename.lower().endswith(".pdf"):
         raise HTTPException(status_code=400, detail="Only PDF files are supported")
     pdf_bytes = await file.read()
     if not pdf_bytes:
         raise HTTPException(status_code=400, detail="Uploaded file is empty")
-    return ingest_pdf_bytes_for_session(pdf_bytes, file.filename, session_id)
+    return ingest_pdf_bytes_for_session(pdf_bytes, file.filename, session_id, doc_id=doc_id)
 
 
 @router.post("/folder")
@@ -48,6 +52,14 @@ async def ingest_folder(payload: FolderIngestRequest) -> dict:
 
 
 @router.get("/documents")
-async def documents() -> dict:
-    docs = list_documents()
+async def documents(session_id: str | None = Query(default=None)) -> dict:
+    docs = list_documents(session_id=session_id)
     return {"documents": docs, "count": len(docs)}
+
+
+@router.delete("/documents")
+async def delete_documents(
+    session_id: str = Query(..., description="Session scope to clear"),
+    doc_id: str | None = Query(default=None, description="Optional document id inside the session"),
+) -> dict:
+    return clear_documents(session_id=session_id, doc_id=doc_id)
