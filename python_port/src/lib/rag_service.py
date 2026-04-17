@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import hashlib
 import importlib
 import io
@@ -13,6 +14,7 @@ from typing import Any, TypedDict
 import fitz
 from PIL import Image
 from langchain_core.documents import Document
+from langchain_core.messages import HumanMessage
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_huggingface import HuggingFaceEmbeddings
@@ -25,6 +27,8 @@ from qdrant_client import QdrantClient, models
 from src.lib.clip_backend import ClipTextEmbeddings, get_clip_backend
 from src.lib.settings import get_settings
 from src.lib.utils import clean_string
+from dotenv import load_dotenv
+load_dotenv()
 
 
 _SETTINGS = get_settings()
@@ -109,9 +113,89 @@ def _clip_image_embedding(image: Image.Image) -> list[float]:
     return _get_clip_backend().embed_image(image.convert("RGB"))
 
 
-def _render_page_image(page: fitz.Page) -> Image.Image:
-    pixmap = page.get_pixmap(matrix=fitz.Matrix(1.5, 1.5), alpha=False)
+def _render_page_image(page: fitz.Page, scale: float = 1.5) -> Image.Image:
+    pixmap = page.get_pixmap(matrix=fitz.Matrix(scale, scale), alpha=False)
     return Image.open(io.BytesIO(pixmap.tobytes("png"))).convert("RGB")
+
+
+def _page_vision_enabled() -> bool:
+    return os.getenv("RAG_PAGE_VISION_ENABLED", "true").strip().lower() in {"1", "true", "yes", "y", "on"}
+
+
+def _page_vision_text_max_chars() -> int:
+    raw = os.getenv("RAG_PAGE_VISION_TEXT_MAX_CHARS", "64").strip()
+    try:
+        return max(0, int(raw))
+    except ValueError:
+        return 64
+
+
+def _visual_page_content_max_chars() -> int:
+    raw = os.getenv("RAG_VISUAL_PAGE_CONTENT_MAX_CHARS", "16000").strip()
+    try:
+        return max(2000, int(raw))
+    except ValueError:
+        return 16000
+
+
+def _message_content_to_str(content: Any) -> str:
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts: list[str] = []
+        for block in content:
+            if isinstance(block, str):
+                parts.append(block)
+            elif isinstance(block, dict):
+                if block.get("type") == "text":
+                    parts.append(str(block.get("text", "")))
+                elif "text" in block:
+                    parts.append(str(block.get("text", "")))
+        return "\n".join(p for p in parts if p)
+    return str(content or "")
+
+
+def _should_run_page_vision(page_text: str) -> bool:
+    if not _page_vision_enabled():
+        return False
+    if not os.getenv("GEMINI_API_KEY", "").strip():
+        return False
+    return len(page_text.strip()) <= _page_vision_text_max_chars()
+
+
+def _transcribe_page_image_with_gemini(page_image: Image.Image) -> str:
+    from langchain_google_genai import ChatGoogleGenerativeAI
+
+    api_key = os.getenv("GEMINI_API_KEY", "").strip()
+    if not api_key:
+        return ""
+    model_name = os.getenv("RAG_PAGE_VISION_MODEL", "").strip() or _SETTINGS.llm.google_model
+    model = ChatGoogleGenerativeAI(
+        model=model_name,
+        temperature=0,
+        google_api_key=api_key,
+    )
+    buf = io.BytesIO()
+    page_image.convert("RGB").save(buf, format="PNG")
+    b64 = base64.b64encode(buf.getvalue()).decode("ascii")
+    prompt = (
+        "You are preparing content for a search index (RAG). Read this PDF page image.\n"
+        "Return plain UTF-8 text only, no markdown fences:\n"
+        "1) Transcribe all readable text in natural reading order; use line breaks between blocks.\n"
+        "2) Briefly describe non-text visuals (charts, diagrams, photos, logos) so they can be searched.\n"
+        "If the page is blank, respond exactly: NO_VISIBLE_CONTENT"
+    )
+    msg = HumanMessage(
+        content=[
+            {"type": "text", "text": prompt},
+            {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{b64}"}},
+        ]
+    )
+    response = model.invoke([msg])
+    raw = clean_string(_message_content_to_str(getattr(response, "content", response))).strip()
+    if raw.upper() in {"NO_VISIBLE_CONTENT", "NO VISIBLE CONTENT."}:
+        return ""
+    return raw
 
 
 def _persist_rendered_page_image(
@@ -441,6 +525,9 @@ def _build_ingest_graph():
         try:
             for page_index, page in enumerate(pdf, start=1):
                 page_text = clean_string(page.get_text("text") or "").strip()
+                run_page_vision = _should_run_page_vision(page_text)
+                render_scale = 2.0 if run_page_vision else 1.5
+
                 if page_text:
                     for chunk in splitter.split_text(page_text):
                         docs.append(
@@ -462,35 +549,72 @@ def _build_ingest_graph():
                         )
                         text_chunks += 1
 
-                if _visual_embeddings_enabled() and visual_pages_processed < _SETTINGS.visual_embeddings.max_visual_pages_per_document:
+                max_visual_pages = _SETTINGS.visual_embeddings.max_visual_pages_per_document
+                want_clip_visual = _visual_embeddings_enabled() and visual_pages_processed < max_visual_pages
+                want_gemini_page = run_page_vision
+                if want_clip_visual or want_gemini_page:
                     try:
-                        page_image = _render_page_image(page)
-                        image_path = _persist_rendered_page_image(page_image, session_id, doc_id, checksum, page_index)
-                        visual_text = clean_string(page_text or f"Visual page {page_index} from {source_name}").strip()
-                        if len(visual_text) > 1200:
-                            visual_text = visual_text[:1200].rstrip() + "..."
-                        visual_points.append(
-                            {
-                                "point_id": uuid.uuid4().hex,
-                                "vector": _clip_image_embedding(page_image),
-                                "page_content": visual_text,
-                                "metadata": {
-                                    "document_id": document_id,
-                                    "doc_id": doc_id,
-                                    "session_id": session_id,
-                                    "source_name": source_name,
-                                    "original_name": original_name,
-                                    "checksum": checksum,
-                                    "pdf_path": stored_pdf_path,
-                                    "image_path": image_path,
-                                    "page_number": page_index,
-                                    "chunk_type": "visual",
-                                    "ingested_at": ingested_at,
-                                },
-                            }
-                        )
-                        visual_chunks += 1
-                        visual_pages_processed += 1
+                        page_image = _render_page_image(page, scale=render_scale)
+
+                        vision_transcript = ""
+                        if want_gemini_page:
+                            try:
+                                vision_transcript = clean_string(_transcribe_page_image_with_gemini(page_image)).strip()
+                            except Exception:
+                                vision_transcript = ""
+
+                        if want_gemini_page and vision_transcript:
+                            for chunk in splitter.split_text(vision_transcript):
+                                docs.append(
+                                    Document(
+                                        page_content=chunk,
+                                        metadata={
+                                            "document_id": document_id,
+                                            "doc_id": doc_id,
+                                            "session_id": session_id,
+                                            "source_name": source_name,
+                                            "original_name": original_name,
+                                            "checksum": checksum,
+                                            "pdf_path": stored_pdf_path,
+                                            "page_number": page_index,
+                                            "chunk_type": "from_image",
+                                            "ingested_at": ingested_at,
+                                        },
+                                    )
+                                )
+                                text_chunks += 1
+
+                        if want_clip_visual:
+                            image_path = _persist_rendered_page_image(page_image, session_id, doc_id, checksum, page_index)
+                            merged = "\n\n".join(part for part in (page_text, vision_transcript) if part).strip()
+                            visual_text = clean_string(
+                                merged or f"Visual page {page_index} from {source_name}"
+                            ).strip()
+                            cap = _visual_page_content_max_chars()
+                            if len(visual_text) > cap:
+                                visual_text = visual_text[:cap].rstrip() + "..."
+                            visual_points.append(
+                                {
+                                    "point_id": uuid.uuid4().hex,
+                                    "vector": _clip_image_embedding(page_image),
+                                    "page_content": visual_text,
+                                    "metadata": {
+                                        "document_id": document_id,
+                                        "doc_id": doc_id,
+                                        "session_id": session_id,
+                                        "source_name": source_name,
+                                        "original_name": original_name,
+                                        "checksum": checksum,
+                                        "pdf_path": stored_pdf_path,
+                                        "image_path": image_path,
+                                        "page_number": page_index,
+                                        "chunk_type": "visual",
+                                        "ingested_at": ingested_at,
+                                    },
+                                }
+                            )
+                            visual_chunks += 1
+                            visual_pages_processed += 1
                     except Exception:
                         continue
         finally:
@@ -567,7 +691,12 @@ def _build_ingest_graph():
                     wait=True,
                 )
 
-        first_meta = docs[0].metadata if docs else {}
+        first_meta: dict[str, Any] = {}
+        if docs:
+            first_meta = dict(docs[0].metadata)
+        elif visual_points:
+            first_meta = dict(visual_points[0].get("metadata") or {})
+
         result = {
             "success": True,
             "duplicate": False,
@@ -751,7 +880,8 @@ def _build_qa_graph():
                 (
                     "system",
                     "You are a research RAG assistant. Answer only from retrieved context. "
-                    "If information is missing, say so. Synthesize across text and visual evidence and mention disagreements when sources conflict.",
+                    "If information is missing, say so. Synthesize across text chunks, transcribed page images (chunk_type from_image), "
+                    "and visual page notes; mention disagreements when sources conflict.",
                 ),
                 (
                     "human",
